@@ -29,11 +29,15 @@ jobs:
           MIXIN_API_KEY: ${{ secrets.MIXIN_API_KEY }}
           BASALAM_TOKEN: ${{ secrets.BASALAM_TOKEN }}
           BASALAM_REFRESH_TOKEN: ${{ secrets.BASALAM_REFRESH_TOKEN }}
+          BASALAM_VENDOR_ID: ${{ secrets.BASALAM_VENDOR_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           # Safe default: DRY_RUN=1. Change to 0 in Settings > Variables when ready.
           DRY_RUN: ${{ vars.DRY_RUN || '1' }}
           MAX_CHANGE_PCT: "40"
           FUZZY_OK: "0"
+          PRICE_MARKUP_PCT: ${{ vars.PRICE_MARKUP_PCT || '0' }}
+          ROUND_RIAL: ${{ vars.ROUND_RIAL || '1' }}
+          SKIP_DISCOUNTED: "1"
           NOTIFY_ERRORS: "1"
         run: python sync_prices.py
