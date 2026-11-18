@@ -18,6 +18,9 @@ Environment variables
   PRICE_MULTIPLIER      "" = detect automatically (10 if Basalam uses Rial, 1 if Toman)
   FUZZY_OK              "1" = also apply similar-name matches (default "0": only
                          identifier / exact-name matches or mapping_overrides.json)
+  PRICE_MARKUP_PCT      default 0. Use 10 if Basalam prices should be site price +10%
+  ROUND_RIAL            default 1. Use 10000 to round Basalam prices to 10,000 Rial steps
+  SKIP_DISCOUNTED       default "1": items with an active Basalam discount are skipped and reported
   NOTIFY_ERRORS         "1" = also send a Telegram message on fatal errors (default "0")
 
 Run modes (workflow runs every 5 minutes):
@@ -50,6 +53,9 @@ MAX_PCT = float(os.environ.get("MAX_CHANGE_PCT", "40") or 40)
 MULT_ENV = os.environ.get("PRICE_MULTIPLIER", "").strip()
 FUZZY_OK = os.environ.get("FUZZY_OK", "0").strip() == "1"
 NOTIFY_ERRORS = os.environ.get("NOTIFY_ERRORS", "0").strip() == "1"
+MARKUP_PCT = float(os.environ.get("PRICE_MARKUP_PCT", "0") or 0)   # e.g. 10 -> Basalam = site price +10%
+ROUND_RIAL = int(os.environ.get("ROUND_RIAL", "1") or 1)           # e.g. 10000 -> round to nearest 10,000 Rial
+SKIP_DISCOUNTED = os.environ.get("SKIP_DISCOUNTED", "1").strip() != "0"  # skip items with an active Basalam discount
 OVERRIDES_FILE = "mapping_overrides.json"
 
 
@@ -269,7 +275,7 @@ def detect_multiplier(site_by_id, bas_by_id, matches):
     for sid, (bid, how) in matches.items():
         if how in ("id", "exact", "override") and bid:
             sp = site_by_id[sid].get("price") or 0
-            bp = bas_by_id[bid].get("primary_price") or 0
+            bp = current_price(bas_by_id[bid]) if not is_discounted(bas_by_id[bid]) else 0
             if sp > 0 and bp > 0:
                 ratios.append(bp / sp)
     if len(ratios) < 5:
@@ -282,6 +288,24 @@ def detect_multiplier(site_by_id, bas_by_id, matches):
         return 1
     raise RuntimeError(f"price unit unclear (median Basalam/site ratio = {med:.2f}); "
                        "set PRICE_MULTIPLIER")
+
+
+def adjust(v):
+    """site price (already x unit multiplier) -> target Basalam price"""
+    v = v * (1 + MARKUP_PCT / 100.0)
+    if ROUND_RIAL > 1:
+        v = round(v / ROUND_RIAL) * ROUND_RIAL
+    return int(round(v))
+
+
+def current_price(o):
+    """Basalam: 'primary_price' only exists when a discount is active; otherwise 'price' is the real price"""
+    return o.get("primary_price") or o.get("price") or 0
+
+
+def is_discounted(o):
+    pp, pr = o.get("primary_price"), o.get("price")
+    return bool(o.get("discount")) or bool(pp and pr and pp != pr)
 
 
 # ----------------------------------------------------------------------------- planning
@@ -309,8 +333,11 @@ def plan(site, variants, bas, matches, mult):
             row["action"] = "needs approval (similar name)"
             rows.append(row)
             continue
-        if b.get("discount"):
-            row["note"] = "Basalam discount is active - final price differs from primary price"
+        row["basalam_price"] = current_price(b)
+        if is_discounted(b) and SKIP_DISCOUNTED:
+            row["action"] = "skipped (Basalam discount active)"
+            rows.append(row)
+            continue
 
         site_vars = variants.get(sid, []) if s.get("has_variants") else []
         bas_vars = b.get("variant") or [] if b.get("has_variation") else []
@@ -320,8 +347,8 @@ def plan(site, variants, bas, matches, mult):
             if price <= 0:
                 row["action"] = "skipped (no price on site)"
             else:
-                target = price * mult
-                old = b.get("primary_price") or 0
+                target = adjust(price * mult)
+                old = current_price(b)
                 if old == target:
                     row["action"] = "same"
                 elif old and abs(target - old) / old * 100 > MAX_PCT:
@@ -368,13 +395,19 @@ def plan(site, variants, bas, matches, mult):
             price = int(round(v.get("price") or 0))
             if price <= 0:
                 continue
-            target, old = price * mult, bvv.get("primary_price") or 0
+            target, old = adjust(price * mult), current_price(bvv)
+            if is_discounted(bvv) and SKIP_DISCOUNTED:
+                blocked = True
+                notes.append("discount")
+                continue
             if old == target:
                 continue
             if old and abs(target - old) / old * 100 > MAX_PCT:
                 blocked = True
             vchg.append({"vid": bvv["id"], "old": old, "new": target})
-        if blocked:
+        if blocked and "discount" in notes:
+            row["action"] = "skipped (Basalam discount active on a variant)"
+        elif blocked:
             row["action"] = f"BLOCKED (a variant changes > {MAX_PCT:.0f}%)"
         elif vchg:
             row["action"] = f"change ({len(vchg)} variants)"
