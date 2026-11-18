@@ -1,0 +1,39 @@
+name: Sync prices to Basalam
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"    # checks Telegram every 5 min; auto sync every 15
+  workflow_dispatch:         # manual run button
+
+concurrency:
+  group: sync-prices
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests basalam-sdk
+
+      - name: Run sync
+        env:
+          MIXIN_BASE_URL: ${{ secrets.MIXIN_BASE_URL }}
+          MIXIN_API_KEY: ${{ secrets.MIXIN_API_KEY }}
+          BASALAM_TOKEN: ${{ secrets.BASALAM_TOKEN }}
+          BASALAM_REFRESH_TOKEN: ${{ secrets.BASALAM_REFRESH_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Safe default: DRY_RUN=1. Change to 0 in Settings > Variables when ready.
+          DRY_RUN: ${{ vars.DRY_RUN || '1' }}
+          MAX_CHANGE_PCT: "40"
+          FUZZY_OK: "0"
+          NOTIFY_ERRORS: "1"
+        run: python sync_prices.py
